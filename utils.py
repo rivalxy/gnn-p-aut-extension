@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -49,12 +50,50 @@ def regularity_check(graph: torch_geometric.data.Data) -> bool:
     return bool(torch.all(degrees == degrees[0]).item())
 
 
+def load_or_compute_dataset_metadata(
+    dataset: list[torch_geometric.data.Data], dataset_path: str
+) -> list[dict[str, Any]]:
+    """Compute per-graph metadata (aut_grp_size, regularity, etc.) with file caching.
+
+    The cache is stored next to the dataset file as ``<name>_metadata_cache.json``.
+    """
+    cache_path = Path(dataset_path).with_name(
+        Path(dataset_path).stem + "_metadata_cache.json"
+    )
+
+    if cache_path.exists():
+        with open(cache_path) as f:
+            cached = json.load(f)
+        if len(cached) == len(dataset):
+            return cached
+
+    metadata = []
+    for graph in dataset:
+        metadata.append(
+            {
+                "num_nodes": graph.num_nodes,
+                "regular": regularity_check(graph),
+                "paut_size": paut_size_from_torch(graph),
+                "aut_grp_size": aut_grp_size_from_torch(graph),
+            }
+        )
+
+    with open(cache_path, "w") as f:
+        json.dump(metadata, f)
+
+    return metadata
+
+
 def evaluate_checkpoint(
     config_path: str, dataset_path: str, checkpoint_path: str
 ) -> dict[str, Any]:
     config = load_json(config_path)
 
     evaluation_dataset = torch.load(dataset_path, weights_only=False)
+
+    dataset_metadata = load_or_compute_dataset_metadata(
+        evaluation_dataset, dataset_path
+    )
 
     is_gps = "num_heads" in config
     if is_gps:
@@ -92,7 +131,7 @@ def evaluate_checkpoint(
     evaluation_model.eval()
 
     records, true_labels, predictions = collect_prediction_records(
-        evaluation_model, evaluation_loader
+        evaluation_model, evaluation_loader, dataset_metadata
     )
     predictions_df = build_predictions_df(records)
 
@@ -113,7 +152,9 @@ def load_json(path: str) -> dict[str, Any]:
 
 
 def collect_prediction_records(
-    model: nn.Module, loader: torch_geometric.loader.DataLoader
+    model: nn.Module,
+    loader: torch_geometric.loader.DataLoader,
+    dataset_metadata: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[int], list[int]]:
     records: list[dict[str, Any]] = []
     true_labels: list[int] = []
@@ -129,13 +170,14 @@ def collect_prediction_records(
         for i, graph in enumerate(batch.to_data_list()):
             true_label = int(graph.y.item())
             pred_label = int(pred[i].item())
+            meta = dataset_metadata[sample_idx]
             records.append(
                 {
                     "sample_idx": sample_idx,
-                    "num_nodes": graph.num_nodes,
-                    "regular": regularity_check(graph),
-                    "paut_size": paut_size_from_torch(graph),
-                    "aut_grp_size": aut_grp_size_from_torch(graph),
+                    "num_nodes": meta["num_nodes"],
+                    "regular": meta["regular"],
+                    "paut_size": meta["paut_size"],
+                    "aut_grp_size": meta["aut_grp_size"],
                     "true_label": true_label,
                     "prediction": pred_label,
                     "pred_prob": float(probs[i].item()),
