@@ -4,9 +4,8 @@ import networkx as nx
 import pytest
 from sympy.combinatorics import Permutation, PermutationGroup
 
+from dataset.build import DatasetType, PautStats, paut_sizes_to_csv
 from dataset.graph_utils import (
-    DatasetType,
-    PautStats,
     bfs_expand_pseudo_similar,
     build_adjacency_dict,
     build_orbit_map,
@@ -15,7 +14,6 @@ from dataset.graph_utils import (
     is_extensible,
     is_injective,
     is_paut,
-    paut_sizes_to_csv,
     read_graphs_from_g6,
 )
 
@@ -145,7 +143,8 @@ def test_build_orbit_map(path_graph_group: PermutationGroup) -> None:
 
 
 # --- bfs_expand_pseudo_similar ---
-#TODO
+# TODO
+
 
 def test_bfs_expand_pseudo_similar_contains_seed() -> None:
     adj = {0: {1}, 1: {0, 2}, 2: {1, 3}, 3: {2}}
@@ -178,20 +177,32 @@ def test_bfs_expand_pseudo_similar_limited_by_sigma_coverage() -> None:
 
 def test_paut_sizes_to_csv(tmp_path: Path) -> None:
     stats = {
-        5: [PautStats(paut_size=3, label=1, dataset_type=DatasetType.TRAIN)],
-        7: [PautStats(paut_size=4, label=0, dataset_type=DatasetType.VAL)],
+        5: [
+            PautStats(
+                paut_size=3,
+                label=1,
+                dataset_type=DatasetType.TRAIN,
+                strategy="positive",
+            )
+        ],
+        7: [
+            PautStats(
+                paut_size=4, label=0, dataset_type=DatasetType.VAL, strategy="blocking"
+            )
+        ],
     }
     csv_path = tmp_path / "stats.csv"
     paut_sizes_to_csv(stats, str(csv_path))
 
     lines = csv_path.read_text().strip().splitlines()
-    assert lines[0] == "num_of_nodes,paut_size,label,dataset_type"
-    assert "5,3,1,train" in lines[1]
-    assert "7,4,0,val" in lines[2]
+    assert lines[0] == "num_of_nodes,paut_size,label,dataset_type,strategy"
+    assert "5,3,1,train,positive" in lines[1]
+    assert "7,4,0,val,blocking" in lines[2]
 
 
 # --- construct_pseudo_similar_graph ---
-#TODO
+# TODO
+
 
 def test_construct_pseudo_similar_graph_structure() -> None:
     # Path 0-1-2-3 with automorphism (0 3)(1 2)
@@ -252,7 +263,8 @@ def test_construct_pseudo_similar_graph_witness_is_valid_isomorphism() -> None:
 
 
 # --- find_pseudo_similar_construction ---
-#TODO
+# TODO
+
 
 def test_find_pseudo_similar_construction_returns_none_for_large_graph() -> None:
     # Graph with 21 nodes exceeds MAX_CONSTRUCTED_NODES - 2 = 20

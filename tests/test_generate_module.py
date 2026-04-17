@@ -5,8 +5,8 @@ import torch
 from pytest import MonkeyPatch
 from torch_geometric.data import Data
 
+from dataset.build import DatasetType, PautStats
 from dataset.generate import main
-from dataset.graph_utils import DatasetType, PautStats
 
 
 def test_main_smoke_with_mocked_io(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
@@ -30,7 +30,7 @@ def test_main_smoke_with_mocked_io(monkeypatch: MonkeyPatch, tmp_path: Path) -> 
                 y=torch.tensor([1.0]),
             )
         ]
-        stats = {1: [PautStats(1, 1, DatasetType.TRAIN)]}
+        stats = {1: [PautStats(1, 1, DatasetType.TRAIN, "positive")]}
         return dataset, stats
 
     saved_paths: list[str] = []

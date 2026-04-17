@@ -1,7 +1,12 @@
 import torch
 
-from dataset.build import RawPautExample, build_edge_index, raw_examples_to_pyg
-from dataset.graph_utils import DatasetType, PautStats
+from dataset.build import (
+    DatasetType,
+    PautStats,
+    RawPautExample,
+    build_edge_index,
+    raw_examples_to_pyg,
+)
 
 
 def test_build_edge_index_empty_graph() -> None:
@@ -33,6 +38,7 @@ def test_raw_examples_to_pyg_converts_and_aggregates_stats() -> None:
                 paut_size=1,
                 label=1,
                 dataset_type=DatasetType.TRAIN,
+                strategy="positive",
             ),
         )
     ]
@@ -58,6 +64,7 @@ def test_raw_examples_to_pyg_with_extra_features() -> None:
                 paut_size=1,
                 label=0,
                 dataset_type=DatasetType.TRAIN,
+                strategy="blocking",
             ),
         )
     ]
