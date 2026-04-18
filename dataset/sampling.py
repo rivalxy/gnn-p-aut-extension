@@ -6,10 +6,10 @@ from sympy.combinatorics import Permutation, PermutationGroup
 
 from dataset.graph_utils import (
     AdjacencyDict,
+    Isomorphism,
     Mapping,
     bfs_expand_pseudo_similar,
     build_orbit_map,
-    find_pseudo_similar_pair,
     is_extensible,
     is_paut,
 )
@@ -21,16 +21,32 @@ MAX_BLOCKING_CANDIDATES = 5
 
 
 def is_identity_permutation(perm: list[int]) -> bool:
+    """Check if a permutation in array form is the identity.
+
+    :param perm: Permutation in array form [p(0), p(1), ...].
+    :returns: True if p(i) == i for all i.
+    """
     return all(i == mapped for i, mapped in enumerate(perm))
 
 
 def mapping_key(mapping: Mapping) -> frozenset[tuple[int, int]]:
+    """Convert a mapping to a frozenset of (src, dst) pairs for deduplication.
+
+    :param mapping: A partial automorphism mapping.
+    :returns: Frozenset of (source, target) pairs.
+    """
     return frozenset(mapping.items())
 
 
 def partial_size_bounds(
     num_of_nodes: int, upper_bound: int | None = None
 ) -> tuple[int, int]:
+    """Return (min_size, max_size) for sampling a partial automorphism domain.
+
+    :param num_of_nodes: Number of nodes in the graph.
+    :param upper_bound: Hard cap on max_size; if None, uses MAX_PARTIAL_AUT_FRACTION.
+    :returns: Tuple (min_size, max_size).
+    """
     min_size = math.ceil(num_of_nodes * MIN_PARTIAL_AUT_FRACTION)
     max_size = (
         upper_bound
@@ -41,6 +57,12 @@ def partial_size_bounds(
 
 
 def sample_partial_size(num_of_nodes: int, upper_bound: int | None = None) -> int:
+    """Sample a random partial automorphism domain size within bounds.
+
+    :param num_of_nodes: Number of nodes in the graph.
+    :param upper_bound: Hard cap on the maximum size; if None, uses MAX_PARTIAL_AUT_FRACTION.
+    :returns: Random integer in [min_size, max_size].
+    """
     min_size, max_size = partial_size_bounds(num_of_nodes, upper_bound)
     return random.randint(min_size, max_size)
 
@@ -50,12 +72,29 @@ def is_non_extensible_paut(
     group: PermutationGroup,
     mapping: Mapping,
 ) -> bool:
+    """Check if mapping is a valid partial automorphism that cannot be extended.
+
+    :param adjacency_list: Adjacency dictionary of the graph.
+    :param group: Automorphism group of the graph.
+    :param mapping: Candidate mapping.
+    :returns: True if the mapping is a partial automorphism and not extensible.
+    """
     return is_paut(adjacency_list, mapping) and not is_extensible(group, mapping)
 
 
 def gen_positive_examples(
     group: PermutationGroup, num_of_nodes: int, examples_num: int
 ) -> list[tuple[Mapping, int]]:
+    """Generate extensible partial automorphisms by restricting full automorphisms.
+
+    Samples random non-identity permutations from the group and restricts each
+    to a random subset of nodes of size in [MIN_PARTIAL_AUT_FRACTION, MAX_PARTIAL_AUT_FRACTION].
+
+    :param group: Automorphism group of the graph.
+    :param num_of_nodes: Number of nodes in the graph.
+    :param examples_num: Target number of distinct examples to generate.
+    :returns: List of (mapping, paut_size) tuples with label 1 (extensible).
+    """
     seen_positives: set[frozenset[tuple[int, int]]] = set()
     positives: list[tuple[Mapping, int]] = []
     attempts = 0
@@ -84,14 +123,26 @@ def gen_pseudo_similar_examples(
     group: PermutationGroup,
     num_of_nodes: int,
     adjacency_list: AdjacencyDict,
+    u: int,
+    v: int,
+    witness: Isomorphism,
     examples_num: int,
 ) -> list[tuple[Mapping, int]]:
-    """Generate hard negative examples using pseudo-similar vertex pairs."""
-    pair = find_pseudo_similar_pair(adjacency_list, group, num_of_nodes)
-    if pair is None:
-        return []
+    """Generate hard negatives from a Godsil-Kocay constructed pseudo-similar pair.
 
-    u, v, sigma = pair
+    The pair (u, v) is guaranteed pseudo-similar and the witness isomorphism
+    maps G-v -> G-u, so we grow partial automorphisms containing u -> v
+    (which is non-extensible by construction).
+
+    :param group: Automorphism group of the constructed graph G.
+    :param num_of_nodes: Number of nodes in G.
+    :param adjacency_list: Adjacency dictionary of G.
+    :param u: Source pseudo-similar vertex.
+    :param v: Target pseudo-similar vertex (different orbit from u).
+    :param witness: Isomorphism G-v -> G-u.
+    :param examples_num: Maximum number of examples to generate.
+    :returns: List of (mapping, paut_size) tuples.
+    """
     negatives: list[tuple[Mapping, int]] = []
     seen: set[frozenset[tuple[int, int]]] = set()
 
@@ -102,7 +153,7 @@ def gen_pseudo_similar_examples(
         attempts += 1
         target_size = random.randint(min_size, max_size)
 
-        mapping = bfs_expand_pseudo_similar(adjacency_list, u, v, sigma, target_size)
+        mapping = bfs_expand_pseudo_similar(adjacency_list, u, v, witness, target_size)
 
         if len(mapping) < min_size:
             continue
@@ -122,6 +173,18 @@ def gen_pseudo_similar_examples(
 def block_automorphism(
     positive: Mapping, num_of_nodes: int, adj: AdjacencyDict, group: PermutationGroup
 ) -> Mapping | None:
+    """Extend a positive mapping by one cross-orbit assignment to make it non-extensible.
+
+    Tries to find an unmapped node and a target in a different orbit such that
+    the extended mapping is still a valid partial automorphism but can no longer
+    be extended to a full automorphism.
+
+    :param positive: An extensible partial automorphism mapping.
+    :param num_of_nodes: Number of nodes in the graph.
+    :param adj: Adjacency dictionary of the graph.
+    :param group: Automorphism group of the graph.
+    :returns: Extended non-extensible mapping, or None if no such extension is found.
+    """
     nodes = list(range(num_of_nodes))
     orbit_of = build_orbit_map(group)
 
@@ -157,7 +220,18 @@ def gen_blocking_examples(
     num_of_nodes: int,
     adjacency_list: AdjacencyDict,
 ) -> list[tuple[Mapping, int]]:
-    """Generate non-extensible partial automorphisms using blocking strategy."""
+    """Generate non-extensible partial automorphisms using the blocking strategy.
+
+    Starts from a random restriction of a full automorphism, then iteratively
+    extends it with cross-orbit assignments via block_automorphism until the
+    mapping becomes non-extensible.
+
+    :param group: Automorphism group of the graph.
+    :param examples_num: Target number of distinct examples to generate.
+    :param num_of_nodes: Number of nodes in the graph.
+    :param adjacency_list: Adjacency dictionary of the graph.
+    :returns: List of (mapping, paut_size) tuples with label 0 (non-extensible).
+    """
     negatives: list[tuple[Mapping, int]] = []
     seen_negatives: set[frozenset[tuple[int, int]]] = set()
     attempts = 0

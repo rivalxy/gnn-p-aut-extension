@@ -1,6 +1,9 @@
+import csv
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import StrEnum
 
+import pynauty
 import torch
 from pynauty import autgrp
 from sympy.combinatorics import Permutation, PermutationGroup
@@ -9,10 +12,9 @@ from torch_geometric.data import Data
 from dataset.features import make_pyg_data
 from dataset.graph_utils import (
     AdjacencyDict,
-    DatasetType,
     GraphData,
     Mapping,
-    PautStats,
+    find_pseudo_similar_construction,
     is_extensible,
     is_paut,
 )
@@ -20,8 +22,47 @@ from dataset.sampling import (
     gen_blocking_examples,
     gen_positive_examples,
     gen_pseudo_similar_examples,
-    mapping_key,
 )
+
+
+class DatasetType(StrEnum):
+    TRAIN = "train"
+    VAL = "val"
+    TEST = "test"
+
+
+@dataclass
+class PautStats:
+    paut_size: int
+    label: int
+    dataset_type: DatasetType
+    strategy: str
+
+
+def paut_sizes_to_csv(
+    stats_by_node_count: dict[int, list[PautStats]], file_path: str
+) -> None:
+    """Write PautStats grouped by node count to a CSV file.
+
+    :param stats_by_node_count: Dictionary mapping number of nodes to a list of PautStats.
+    :param file_path: Path to the output CSV file.
+    """
+    with open(file_path, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(
+            ["num_of_nodes", "paut_size", "label", "dataset_type", "strategy"]
+        )
+        for num_of_nodes, stats in stats_by_node_count.items():
+            for stat in stats:
+                writer.writerow(
+                    [
+                        num_of_nodes,
+                        stat.paut_size,
+                        stat.label,
+                        stat.dataset_type,
+                        stat.strategy,
+                    ]
+                )
 
 
 @dataclass
@@ -50,7 +91,11 @@ class DatasetConfiguration:
 
 
 def build_edge_index(adjacency_dict: AdjacencyDict) -> torch.Tensor:
-    """Build a PyG edge index from an adjacency dictionary."""
+    """Build a PyG edge index tensor from an adjacency dictionary.
+
+    :param adjacency_dict: Dictionary mapping each node to its set of neighbors.
+    :returns: Long tensor of shape (2, num_edges) suitable for PyG.
+    """
     if len(adjacency_dict) == 0:
         return torch.empty((2, 0), dtype=torch.long)
 
@@ -71,7 +116,23 @@ def append_validated_examples(
     group: PermutationGroup,
     label: int,
     dataset_type: DatasetType,
+    strategy: str,
 ) -> None:
+    """Validate examples and append them to raw_examples.
+
+    Asserts that each mapping is a valid partial automorphism and that its
+    extensibility matches the given label, then appends a RawPautExample.
+
+    :param raw_examples: List to append validated examples to.
+    :param examples: List of (mapping, paut_size) tuples to validate and append.
+    :param edge_index: PyG edge index tensor for the graph.
+    :param num_of_nodes: Number of nodes in the graph.
+    :param adjacency_dict: Adjacency dictionary of the graph.
+    :param group: Automorphism group of the graph.
+    :param label: Expected label (1 = extensible, 0 = non-extensible).
+    :param dataset_type: Which split (train/val/test) this example belongs to.
+    :param strategy: Sampling strategy used to generate these examples.
+    """
     expected_extensible = label == 1
     for mapping, p_aut_size in examples:
         assert is_paut(adjacency_dict, mapping)
@@ -83,7 +144,7 @@ def append_validated_examples(
                 num_of_nodes=num_of_nodes,
                 mapping=mapping,
                 label=label,
-                paut_stats=PautStats(p_aut_size, label, dataset_type),
+                paut_stats=PautStats(p_aut_size, label, dataset_type, strategy),
             )
         )
 
@@ -109,6 +170,7 @@ def generate_raw_examples(
 
         tensor_edge_index = build_edge_index(adjacency_dict)
 
+        # --- positives from F ---
         positives = gen_positive_examples(group, num_of_nodes, examples_num)
         append_validated_examples(
             raw_examples,
@@ -119,34 +181,83 @@ def generate_raw_examples(
             group=group,
             label=1,
             dataset_type=dataset_type,
+            strategy="positive",
         )
 
-        negatives_pseudo = gen_pseudo_similar_examples(
-            group, num_of_nodes, adjacency_dict, examples_num
-        )
-        negatives_blocking = gen_blocking_examples(
-            group, examples_num, num_of_nodes, adjacency_dict
-        )
+        # --- negatives: up to 50% from Godsil-Kocay construction, rest blocking ---
+        max_constructed = len(positives) // 2
+        negatives_constructed: list[tuple[Mapping, int]] = []
+        constructed_edge_index = tensor_edge_index
+        constructed_adj = adjacency_dict
+        constructed_num_nodes = num_of_nodes
+        constructed_group = group
 
-        negative_seen_keys: set[frozenset[tuple[int, int]]] = {
-            mapping_key(mapping) for mapping, _ in negatives_pseudo
-        }
-        negatives_blocking_filtered = [
-            sample
-            for sample in negatives_blocking
-            if mapping_key(sample[0]) not in negative_seen_keys
-        ]
-        negatives = (negatives_pseudo + negatives_blocking_filtered)[: len(positives)]
+        construction = find_pseudo_similar_construction(
+            adjacency_dict, num_of_nodes, group
+        )
+        if construction is not None:
+            adj_G, n_G, u, v, witness = construction
+            pg = pynauty.Graph(n_G)
+            pg.set_adjacency_dict(adj_G)
+            gens_raw, _, _, _, _ = pynauty.autgrp(pg)
+            gens_G = [Permutation(g) for g in gens_raw] or [Permutation(n_G - 1)]
+            group_G = PermutationGroup(gens_G)
 
+            negatives_constructed = gen_pseudo_similar_examples(
+                group_G, n_G, adj_G, u, v, witness, max_constructed
+            )
+            constructed_edge_index = build_edge_index(adj_G)
+            constructed_adj = adj_G
+            constructed_num_nodes = n_G
+            constructed_group = group_G
+
+        # Append constructed pseudo-similar negatives (on graph G)
         append_validated_examples(
             raw_examples,
-            negatives,
+            negatives_constructed,
+            edge_index=constructed_edge_index,
+            num_of_nodes=constructed_num_nodes,
+            adjacency_dict=constructed_adj,
+            group=constructed_group,
+            label=0,
+            dataset_type=dataset_type,
+            strategy="pseudo_similar",
+        )
+
+        # Generate matching positives from G so the model sees both labels
+        # for the constructed graph structure (only if G has non-trivial automorphisms)
+        positives_G: list[tuple[Mapping, int]] = []
+        if negatives_constructed and not constructed_group.is_trivial:
+            positives_G = gen_positive_examples(
+                constructed_group, constructed_num_nodes, len(negatives_constructed)
+            )
+            append_validated_examples(
+                raw_examples,
+                positives_G,
+                edge_index=constructed_edge_index,
+                num_of_nodes=constructed_num_nodes,
+                adjacency_dict=constructed_adj,
+                group=constructed_group,
+                label=1,
+                dataset_type=dataset_type,
+                strategy="positive",
+            )
+
+        # Fill blocking negatives so total negatives == total positives
+        remaining = len(positives) + len(positives_G) - len(negatives_constructed)
+        negatives_blocking = gen_blocking_examples(
+            group, remaining, num_of_nodes, adjacency_dict
+        )
+        append_validated_examples(
+            raw_examples,
+            negatives_blocking[:remaining],
             edge_index=tensor_edge_index,
             num_of_nodes=num_of_nodes,
             adjacency_dict=adjacency_dict,
             group=group,
             label=0,
             dataset_type=dataset_type,
+            strategy="blocking",
         )
 
     return raw_examples
@@ -172,12 +283,3 @@ def raw_examples_to_pyg(
         )
 
     return pyg_data, paut_sizes
-
-
-def generate_paut_dataset(
-    pynauty_graphs: list[GraphData], dataset_type: DatasetType, config: tuple[int, bool]
-) -> tuple[list[Data], dict[int, list[PautStats]]]:
-    """Generate a labeled partial automorphism dataset from pynauty graphs."""
-    max_examples_num, extra_features = config
-    raw_examples = generate_raw_examples(pynauty_graphs, dataset_type, max_examples_num)
-    return raw_examples_to_pyg(raw_examples, extra_features)

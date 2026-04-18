@@ -1,23 +1,43 @@
-import csv
 import random
 from collections import deque
-from dataclasses import dataclass
-from enum import StrEnum
 from collections.abc import Iterable
-from typing import TypeAlias, cast
+from dataclasses import dataclass
+from typing import NamedTuple, cast
 
 import networkx as nx
 import pynauty
 from sympy.combinatorics import Permutation, PermutationGroup
 
-Edge: TypeAlias = tuple[int, int]
-Mapping: TypeAlias = dict[int, int]
-AdjacencyDict: TypeAlias = dict[int, set[int]]
-OrbitMap: TypeAlias = dict[int, int]
-Isomorphism: TypeAlias = dict[int, int]
+type Edge = tuple[int, int]
+type Mapping = dict[int, int]
+type AdjacencyDict = dict[int, set[int]]
+type OrbitMap = dict[int, int]
+type Isomorphism = dict[int, int]
+
+MAX_CONSTRUCTED_NODES = 22
+
+
+class PseudoSimilarGraph(NamedTuple):
+    adj: AdjacencyDict
+    num_nodes: int
+    u: int
+    v: int
+    witness: Isomorphism
+
+
+@dataclass
+class GraphData:
+    graph: pynauty.Graph
+    num_of_nodes: int
+    adjacency_dict: AdjacencyDict
 
 
 def build_orbit_map(group: PermutationGroup) -> OrbitMap:
+    """Map each node to its orbit index in the automorphism group.
+
+    :param group: The automorphism group of the graph.
+    :returns: Dictionary mapping each node to its orbit index (0-based).
+    """
     return {node: i for i, orbit in enumerate(group.orbits()) for node in orbit}
 
 
@@ -34,20 +54,16 @@ def build_adjacency_dict(edge_list: Iterable[Edge]) -> AdjacencyDict:
     return adjacency_dict
 
 
-@dataclass
-class GraphData:
-    graph: pynauty.Graph
-    num_of_nodes: int
-    adjacency_dict: AdjacencyDict
-
-
 def read_graphs_from_g6(file_path: str) -> list[GraphData]:
     """Read graphs from a .g6 file and convert them to pynauty format.
 
     :param file_path: Path to the .g6 file.
     :returns: List of GraphData objects containing the pynauty graph, number of nodes, and adjacency dictionary.
     """
-    graphs: list[nx.Graph] = nx.read_graph6(file_path)
+    graphs: nx.Graph | list[nx.Graph] = nx.read_graph6(file_path)
+    if isinstance(graphs, nx.Graph):
+        graphs = [graphs]
+
     graph_data_list: list[GraphData] = []
     for graph in graphs:
         num_of_nodes = graph.number_of_nodes()
@@ -117,88 +133,6 @@ def is_extensible(group: PermutationGroup, mapping: Mapping) -> bool:
     return False
 
 
-def adj_to_nx_graph(adj: AdjacencyDict, num_nodes: int) -> nx.Graph:
-    """Convert an adjacency dictionary to a NetworkX graph.
-
-    :param adj: Adjacency dictionary of the graph.
-    :param num_nodes: Number of nodes.
-    :returns: Equivalent NetworkX Graph.
-    """
-    graph = nx.Graph()
-    graph.add_nodes_from(range(num_nodes))
-    for u, neighbors in adj.items():
-        for v in neighbors:
-            graph.add_edge(u, v)
-    return graph
-
-
-def check_deletion_isomorphism(graph: nx.Graph, u: int, v: int) -> Isomorphism | None:
-    """Check whether G - u is isomorphic to G - v.
-
-    If so, return a witnessing isomorphism sigma: V(G-u) -> V(G-v).
-    sigma is defined on every vertex except u, and maps to every vertex
-    except v.
-
-    :param graph: A NetworkX graph.
-    :param u: First vertex to delete.
-    :param v: Second vertex to delete.
-    :returns: Isomorphism dict or None if G-u ≇ G-v.
-    """
-    graph_minus_u = graph.copy()
-    graph_minus_u.remove_node(u)
-    graph_minus_v = graph.copy()
-    graph_minus_v.remove_node(v)
-
-    gm = nx.algorithms.isomorphism.GraphMatcher(graph_minus_u, graph_minus_v)
-    if gm.is_isomorphic():
-        return next(gm.isomorphisms_iter())
-    return None
-
-
-def find_pseudo_similar_pair(
-    adj: AdjacencyDict,
-    group: PermutationGroup,
-    num_nodes: int,
-    max_pairs: int = 100,
-) -> tuple[int, int, dict[int, int]] | None:
-    """Search for a pseudo-similar pair in the graph.
-
-    A pseudo-similar pair (u, v) satisfies:
-      - u and v are in *different* orbits of Aut(G)  → {u→v} is non-extendable
-      - G - u ≅ G - v                                → the seed looks locally valid
-
-    :param adj: Adjacency dictionary of the graph.
-    :param group: Automorphism group of the graph.
-    :param num_nodes: Number of nodes.
-    :param max_pairs: Maximum cross-orbit pairs to test before giving up.
-    :returns: (u, v, sigma) where sigma: V(G-u) -> V(G-v), or None if not found.
-    """
-    graph = adj_to_nx_graph(adj, num_nodes)
-    orbit_of = build_orbit_map(group)
-
-    nodes = list(range(num_nodes))
-    random.shuffle(nodes)
-    checked = 0
-
-    for u in nodes:
-        for v in nodes:
-            if u >= v:
-                continue
-
-            if orbit_of.get(u) == orbit_of.get(v):
-                continue
-
-            sigma = check_deletion_isomorphism(graph, u, v)
-            if sigma is not None:
-                return u, v, sigma
-
-            checked += 1
-            if checked >= max_pairs:
-                return None
-
-    return None
-
-
 def bfs_expand_pseudo_similar(
     adj: AdjacencyDict,
     u: int,
@@ -218,7 +152,7 @@ def bfs_expand_pseudo_similar(
     :param adj: Adjacency dictionary of the original graph.
     :param u: Seed source vertex.
     :param v: Seed target vertex (image of u).
-    :param sigma: Witnessing isomorphism V(G-u) -> V(G-v).
+    :param sigma: Witnessing isomorphism V(G-v) -> V(G-u).
     :param target_size: Stop once the mapping reaches this size.
     :returns: A partial automorphism containing u → v, of size ≤ target_size.
     """
@@ -254,37 +188,93 @@ def bfs_expand_pseudo_similar(
     return mapping
 
 
-class DatasetType(StrEnum):
-    TRAIN = "train"
-    VAL = "val"
-    TEST = "test"
+def construct_pseudo_similar_graph(
+    base_adj: AdjacencyDict,
+    num_nodes: int,
+    sigma: list[int],
+    S: set[int],
+) -> PseudoSimilarGraph:
+    """Godsil-Kocay two-vertex attachment: build G = F + {u,v} with G-u ≅ G-v.
 
+    Given base graph F with automorphism sigma and subset S ⊆ V(F),
+    vertex u is adjacent to S and vertex v is adjacent to sigma(S).
+    The witnessing isomorphism G-v → G-u is sigma on V(F), u → v.
 
-@dataclass
-class PautStats:
-    paut_size: int
-    label: int
-    dataset_type: DatasetType
-
-
-def paut_sizes_to_csv(
-    stats_by_node_count: dict[int, list[PautStats]], file_path: str
-) -> None:
-    """Write PautStats grouped by node count to a CSV file.
-
-    :param stats_by_node_count: Dictionary mapping number of nodes to a list of PautStats.
-    :param file_path: Path to the output CSV file.
+    :param base_adj: Adjacency dictionary of the base graph F.
+    :param num_nodes: Number of nodes in F.
+    :param sigma: Automorphism of F in array form [sigma(0), sigma(1), ...].
+    :param S: Subset of V(F) — the neighborhood of the new vertex u.
+    :returns: (adj_G, |V(G)|, u, v, witness_isomorphism).
     """
-    with open(file_path, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["num_of_nodes", "paut_size", "label", "dataset_type"])
-        for num_of_nodes, stats in stats_by_node_count.items():
-            for stat in stats:
-                writer.writerow(
-                    [
-                        num_of_nodes,
-                        stat.paut_size,
-                        stat.label,
-                        stat.dataset_type,
-                    ]
-                )
+    u = num_nodes
+    v = num_nodes + 1
+
+    adj: AdjacencyDict = {node: set(nbrs) for node, nbrs in base_adj.items()}
+    adj[u] = set()
+    adj[v] = set()
+
+    for w in S:
+        adj[u].add(w)
+        adj.setdefault(w, set()).add(u)
+
+    sigma_S = {sigma[w] for w in S}
+    for w in sigma_S:
+        adj[v].add(w)
+        adj.setdefault(w, set()).add(v)
+
+    witness: Isomorphism = {w: sigma[w] for w in range(num_nodes)}
+    witness[u] = v
+
+    return PseudoSimilarGraph(adj, num_nodes + 2, u, v, witness)
+
+
+def find_pseudo_similar_construction(
+    base_adj: AdjacencyDict,
+    num_nodes: int,
+    group: PermutationGroup,
+    max_attempts: int = 200,
+) -> PseudoSimilarGraph | None:
+    """Search for a Godsil-Kocay construction that yields pseudo-similar vertices.
+
+    Tries random non-identity automorphisms and random subsets S until
+    a construction produces vertices u, v in different orbits of G.
+    Skips base graphs with more than MAX_CONSTRUCTED_NODES - 2 nodes so
+    that the result stays within the dataset's node limit.
+
+    :param base_adj: Adjacency dictionary of the base graph F.
+    :param num_nodes: Number of nodes in F.
+    :param group: Automorphism group of F.
+    :param max_attempts: Maximum random trials.
+    :returns: PseudoSimilarGraph or None.
+    """
+    if num_nodes > MAX_CONSTRUCTED_NODES - 2:
+        return None
+
+    elements = [cast(Permutation, phi).array_form for phi in group.generate()]
+
+    for _ in range(max_attempts):
+        sigma = random.choice(elements)
+        if all(i == sigma[i] for i in range(num_nodes)):
+            continue
+
+        k = random.randint(1, max(1, num_nodes - 1))
+        S = set(random.sample(range(num_nodes), k))
+        S_frozen = frozenset(S)
+        sigma_S = frozenset(sigma[w] for w in S)
+
+        if S_frozen == sigma_S:
+            continue
+
+        # u and v land in the same orbit iff some φ ∈ Aut(F) swaps S and σ(S).
+        # Check this directly on F instead of running nauty on the larger G.
+        swapped = any(
+            frozenset(phi[w] for w in S_frozen) == sigma_S
+            and frozenset(phi[w] for w in sigma_S) == S_frozen
+            for phi in elements
+        )
+        if swapped:
+            continue
+
+        return construct_pseudo_similar_graph(base_adj, num_nodes, sigma, S)
+
+    return None

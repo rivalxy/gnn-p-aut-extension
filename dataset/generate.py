@@ -7,15 +7,13 @@ from sklearn.model_selection import train_test_split
 
 from dataset.build import (
     DatasetConfiguration,
-    generate_raw_examples,
-    raw_examples_to_pyg,
-)
-from dataset.graph_utils import (
     DatasetType,
     PautStats,
+    generate_raw_examples,
     paut_sizes_to_csv,
-    read_graphs_from_g6,
+    raw_examples_to_pyg,
 )
+from dataset.graph_utils import read_graphs_from_g6
 
 
 def main() -> None:

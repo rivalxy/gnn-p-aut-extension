@@ -18,6 +18,11 @@ FEATURE_AVG_NEIGHBOR_DEGREE = 6
 
 
 def normalize_positive_values(values: torch.Tensor) -> torch.Tensor:
+    """Normalize a tensor by its maximum value.
+
+    :param values: 1-D tensor of non-negative floats.
+    :returns: Tensor divided by its maximum value, or unchanged if empty or max <= 0.
+    """
     if values.numel() == 0:
         return values
 
@@ -31,6 +36,16 @@ def normalize_positive_values(values: torch.Tensor) -> torch.Tensor:
 def build_extra_feature_matrix(
     tensor_edge_index: torch.Tensor, num_of_nodes: int
 ) -> torch.Tensor:
+    """Build the EXTRA_FEATURE_DIM node feature matrix with graph-structural features.
+
+    Computes normalized degree, clustering coefficient, normalized triangle count,
+    and normalized average neighbor degree for each node. The node-ID, source, and
+    target columns are left at -1 to be filled in by make_pyg_data.
+
+    :param tensor_edge_index: PyG edge index tensor of shape (2, num_edges).
+    :param num_of_nodes: Number of nodes in the graph.
+    :returns: Float tensor of shape (num_of_nodes, EXTRA_FEATURE_DIM).
+    """
     x = torch.full((num_of_nodes, EXTRA_FEATURE_DIM), -1.0, dtype=torch.float)
     pyg_graph = Data(edge_index=tensor_edge_index, num_nodes=num_of_nodes)
     nx_graph = to_networkx(pyg_graph, to_undirected=True)
@@ -76,7 +91,15 @@ def make_pyg_data(
     label: int,
     extra_features: bool,
 ) -> Data:
-    """Create a PyTorch Geometric Data object from a partial automorphism mapping."""
+    """Create a PyTorch Geometric Data object from a partial automorphism mapping.
+
+    :param tensor_edge_index: PyG edge index tensor of shape (2, num_edges).
+    :param num_of_nodes: Number of nodes in the graph.
+    :param mapping: Partial automorphism mapping from source to target node indices.
+    :param label: 1 if the mapping is extensible to a full automorphism, 0 otherwise.
+    :param extra_features: If True, include structural graph features; otherwise use baseline features.
+    :returns: PyG Data object with node features x and graph label y.
+    """
     if extra_features:
         x = build_extra_feature_matrix(tensor_edge_index, num_of_nodes)
     else:
