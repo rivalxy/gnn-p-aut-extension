@@ -1,4 +1,4 @@
-# Bachelor Thesis: Graph Neural Network for Algebraic Graph Theory
+# Bachelor Thesis: Graph neural networks and extensibility of partial graph automorphisms
 
 This repository contains the code, experiments, and validation statistics for my bachelor thesis, which focuses on training a Graph Neural Network (GNN) to determine whether a partial automorphism of a graph can be extended to a full automorphism.
 
