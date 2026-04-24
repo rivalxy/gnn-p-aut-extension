@@ -2,14 +2,16 @@ import json
 import os
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 from sklearn.model_selection import train_test_split
+from sympy.core.random import seed as sympy_seed
 
 from dataset.build import (
-    DatasetConfiguration,
     DatasetType,
     PautStats,
+    RawPautExample,
     generate_raw_examples,
     paut_sizes_to_csv,
     raw_examples_to_pyg,
@@ -17,8 +19,21 @@ from dataset.build import (
 from dataset.graph_utils import read_graphs_from_g6
 
 
+@dataclass(frozen=True)
+class TrainConfiguration:
+    """One train-dataset variant: feature flavor, source examples, output paths."""
+
+    name: str
+    raw_train: list[RawPautExample]
+    extra_features: bool
+    val_paut_sizes: dict[int, list[PautStats]]
+    train_output_path: str
+    paut_sizes_output_path: str
+
+
 def main() -> None:
     random.seed(42)
+    sympy_seed(42)
     positive_graphs = read_graphs_from_g6("dataset/all_graphs.g6")
 
     graphs_train, graphs_temp, idx_train, idx_temp = train_test_split(
@@ -67,12 +82,16 @@ def main() -> None:
     test_dataset_7f, _ = raw_examples_to_pyg(raw_test, extra_features=True)
 
     print("Generating train examples (max_examples=10)...")
-    raw_train_10 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 10, seen_canonical)
-    print(f"  train: {len(raw_train_10)}")
+    raw_train_size10 = generate_raw_examples(
+        graphs_train, DatasetType.TRAIN, 10, seen_canonical
+    )
+    print(f"  train: {len(raw_train_size10)}")
 
     print("Generating train examples (max_examples=20)...")
-    raw_train_20 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 20, seen_canonical)
-    print(f"  train: {len(raw_train_20)}")
+    raw_train_size20 = generate_raw_examples(
+        graphs_train, DatasetType.TRAIN, 20, seen_canonical
+    )
+    print(f"  train: {len(raw_train_size20)}")
 
     os.makedirs("dataset/baseline", exist_ok=True)
     os.makedirs("dataset/7_features", exist_ok=True)
@@ -83,40 +102,34 @@ def main() -> None:
     torch.save(val_dataset_7f, "dataset/7_features/val_dataset_7_features.pt")
     torch.save(test_dataset_7f, "dataset/7_features/test_dataset_7_features.pt")
 
-    configurations = [
-        DatasetConfiguration(
-            name="baseline",
-            raw_train=raw_train_10,
+    train_configurations = [
+        TrainConfiguration(
+            name="baseline_10",
+            raw_train=raw_train_size10,
             extra_features=False,
             val_paut_sizes=val_paut_sizes_baseline,
             train_output_path="dataset/baseline/train_dataset_baseline.pt",
             paut_sizes_output_path="dataset/baseline/paut_sizes_baseline.csv",
-            val_dataset=val_dataset_baseline,
-            test_dataset=test_dataset_baseline,
         ),
-        DatasetConfiguration(
-            name="7_features",
-            raw_train=raw_train_10,
+        TrainConfiguration(
+            name="7f_10",
+            raw_train=raw_train_size10,
             extra_features=True,
             val_paut_sizes=val_paut_sizes_7f,
             train_output_path="dataset/7_features/train_dataset_7_features.pt",
             paut_sizes_output_path="dataset/7_features/paut_sizes_7_features.csv",
-            val_dataset=val_dataset_7f,
-            test_dataset=test_dataset_7f,
         ),
-        DatasetConfiguration(
-            name="larger",
-            raw_train=raw_train_20,
+        TrainConfiguration(
+            name="baseline_20",
+            raw_train=raw_train_size20,
             extra_features=False,
             val_paut_sizes=val_paut_sizes_baseline,
             train_output_path="dataset/train_dataset.pt",
             paut_sizes_output_path="dataset/paut_sizes.csv",
-            val_dataset=val_dataset_baseline,
-            test_dataset=test_dataset_baseline,
         ),
     ]
 
-    for config in configurations:
+    for config in train_configurations:
         print(f"Encoding train dataset for configuration: {config.name}")
 
         train_dataset, train_paut_sizes = raw_examples_to_pyg(
@@ -132,9 +145,9 @@ def main() -> None:
         torch.save(train_dataset, config.train_output_path)
         paut_sizes_to_csv(paut_sizes, config.paut_sizes_output_path)
 
-        print(
-            f"Generated {len(train_dataset)} train, {len(config.val_dataset)} val, {len(config.test_dataset)} test examples."
-        )
+        print(f"Generated {len(train_dataset)} train examples.")
+
+    print(f"Shared val={len(raw_val)} raw examples, test={len(raw_test)} raw examples.")
 
 
 if __name__ == "__main__":
