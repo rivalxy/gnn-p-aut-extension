@@ -153,8 +153,18 @@ def generate_raw_examples(
     pynauty_graphs: list[GraphData],
     dataset_type: DatasetType,
     max_examples_num: int,
+    seen_canonical: dict[bytes, DatasetType] | None = None,
 ) -> list[RawPautExample]:
-    """Generate raw partial automorphism examples without feature encoding."""
+    """Generate raw partial automorphism examples without feature encoding.
+
+    :param pynauty_graphs: Source graphs to generate examples from.
+    :param dataset_type: Which split (train/val/test) these examples belong to.
+    :param max_examples_num: Maximum examples per graph.
+    :param seen_canonical: Optional shared dict mapping nauty canonical certificates
+        to the split that first used that constructed graph G. When provided, any G
+        whose certificate was already claimed by a different split is skipped, preventing
+        isomorphic constructed graphs from appearing in multiple splits.
+    """
     raw_examples: list[RawPautExample] = []
 
     for graph_data in pynauty_graphs:
@@ -195,6 +205,16 @@ def generate_raw_examples(
         construction = find_pseudo_similar_construction(
             adjacency_dict, num_of_nodes, group
         )
+
+        # Guard against isomorphic G's appearing in multiple splits.
+        if construction is not None and seen_canonical is not None:
+            pg_cert = pynauty.Graph(construction.num_nodes)
+            pg_cert.set_adjacency_dict(construction.adj)
+            cert = pynauty.certificate(pg_cert)
+            if cert in seen_canonical and seen_canonical[cert] != dataset_type:
+                construction = None
+            else:
+                seen_canonical[cert] = dataset_type
         if construction is not None:
             adj_G, n_G, u, v, witness = construction
             pg = pynauty.Graph(n_G)

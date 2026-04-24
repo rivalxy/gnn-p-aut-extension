@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from collections import defaultdict
 
 import torch
@@ -17,6 +18,7 @@ from dataset.graph_utils import read_graphs_from_g6
 
 
 def main() -> None:
+    random.seed(42)
     positive_graphs = read_graphs_from_g6("dataset/all_graphs.g6")
 
     graphs_train, graphs_temp, idx_train, idx_temp = train_test_split(
@@ -34,14 +36,21 @@ def main() -> None:
     with open("dataset/splits.json", "w") as f:
         json.dump(splits, f)
 
+    # Shared across all splits: maps nauty canonical certificate of each constructed
+    # graph G to the split that first registered it. Val/test are generated first so
+    # their G's are registered before train, ensuring train never reuses them.
+    seen_canonical: dict[bytes, DatasetType] = {}
+
     val_test_max_examples = 10
     print("Generating shared val examples...")
-    raw_val = generate_raw_examples(graphs_val, DatasetType.VAL, val_test_max_examples)
+    raw_val = generate_raw_examples(
+        graphs_val, DatasetType.VAL, val_test_max_examples, seen_canonical
+    )
     print(f"Generated {len(raw_val)} raw val examples.")
 
     print("Generating shared test examples...")
     raw_test = generate_raw_examples(
-        graphs_test, DatasetType.TEST, val_test_max_examples
+        graphs_test, DatasetType.TEST, val_test_max_examples, seen_canonical
     )
     print(f"Generated {len(raw_test)} raw test examples.")
 
@@ -58,11 +67,11 @@ def main() -> None:
     test_dataset_7f, _ = raw_examples_to_pyg(raw_test, extra_features=True)
 
     print("Generating train examples (max_examples=10)...")
-    raw_train_10 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 10)
+    raw_train_10 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 10, seen_canonical)
     print(f"  train: {len(raw_train_10)}")
 
     print("Generating train examples (max_examples=20)...")
-    raw_train_20 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 20)
+    raw_train_20 = generate_raw_examples(graphs_train, DatasetType.TRAIN, 20, seen_canonical)
     print(f"  train: {len(raw_train_20)}")
 
     os.makedirs("dataset/baseline", exist_ok=True)
