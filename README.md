@@ -1,6 +1,6 @@
 # GNN Extensibility of Partial Graph Automorphisms
 
-Thesis: https://doi.org/10.5281/zenodo.24403814”
+[Thesis (Zenodo, DOI 10.5281/zenodo.24403814)](https://doi.org/10.5281/zenodo.24403814)
 
 Can a graph neural network learn whether a partial automorphism extends to a full one? This repository contains the experiments for my bachelor thesis, which investigates this question using GIN and GPS architectures on a dataset of highly symmetric graphs.
 
